@@ -1,9 +1,35 @@
 package com.campsnap;
 
-import com.drew.imaging.ImageMetadataReader;
-import com.drew.imaging.ImageProcessingException;
-import com.drew.metadata.Metadata;
-import com.drew.metadata.exif.ExifSubIFDDirectory;
+import java.awt.BorderLayout;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
+import javax.swing.BorderFactory;
+import javax.swing.BoxLayout;
+import javax.swing.ButtonGroup;
+import javax.swing.JButton;
+import javax.swing.JFileChooser;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JRadioButton;
+import javax.swing.JScrollPane;
+import javax.swing.JTable;
+import javax.swing.JTextField;
+import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
+import javax.swing.table.DefaultTableModel;
+
 import org.apache.commons.imaging.Imaging;
 import org.apache.commons.imaging.common.ImageMetadata;
 import org.apache.commons.imaging.formats.jpeg.JpegImageMetadata;
@@ -12,14 +38,10 @@ import org.apache.commons.imaging.formats.tiff.constants.ExifTagConstants;
 import org.apache.commons.imaging.formats.tiff.write.TiffOutputDirectory;
 import org.apache.commons.imaging.formats.tiff.write.TiffOutputSet;
 
-import javax.swing.*;
-import javax.swing.table.DefaultTableModel;
-import java.awt.*;
-import java.io.*;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
-import java.text.SimpleDateFormat;
-import java.util.Date;
+import com.drew.imaging.ImageMetadataReader;
+import com.drew.imaging.ImageProcessingException;
+import com.drew.metadata.Metadata;
+import com.drew.metadata.exif.ExifSubIFDDirectory;
 
 public class MainWindow extends JFrame {
     private DefaultTableModel tableModel;
@@ -299,48 +321,6 @@ public class MainWindow extends JFrame {
         } else {
             dateDifferenceLabel.setText("No valid dates found in photos");
         }
-
-        // Second pass: process each photo
-        for (File file : files) {
-            try {
-                Metadata metadata = ImageMetadataReader.readMetadata(file);
-                ExifSubIFDDirectory directory = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
-                
-                String fileName = file.getName();
-                String dateTaken = "Unknown";
-                String newDate = "Unknown";
-                
-                if (directory != null) {
-                    Date date = directory.getDateOriginal();
-                    if (date != null) {
-                        dateTaken = dateFormat.format(date);
-                        
-                        // Calculate new date by adding the same time difference
-                        Date calculatedDate = new Date(date.getTime() + this.timeToAdd);
-                        newDate = dateFormat.format(calculatedDate);
-                    }
-                }
-                
-                tableModel.addRow(new Object[]{fileName, dateTaken, newDate});
-            } catch (ImageProcessingException | IOException e) {
-                e.printStackTrace();
-                tableModel.addRow(new Object[]{file.getName(), "Error reading metadata", "Error"});
-            }
-        }
-
-        // Calculate and display the date difference
-        if (mostRecentDate != null) {
-            long diffInMillies = currentDate.getTime() - mostRecentDate.getTime();
-            long diffInDays = diffInMillies / (24 * 60 * 60 * 1000);
-            
-            String recentDateStr = dateFormat.format(mostRecentDate);
-            dateDifferenceLabel.setText(String.format(
-                "<html>Most recent photo: %s<br>Days since then: %d</html>",
-                recentDateStr, diffInDays
-            ));
-        } else {
-            dateDifferenceLabel.setText("No valid dates found in photos");
-        }
     }
 
     private void handleUpdateDates(boolean modifyOriginal) {
@@ -372,6 +352,34 @@ public class MainWindow extends JFrame {
 
             if (chooser.showDialog(this, "Select") == JFileChooser.APPROVE_OPTION) {
                 File destinationDir = chooser.getSelectedFile();
+                
+                // Check if any source files are in the selected directory
+                boolean sourceFilesInDestination = false;
+                for (File sourceFile : selectedFiles) {
+                    if (sourceFile.getParentFile().equals(destinationDir)) {
+                        sourceFilesInDestination = true;
+                        break;
+                    }
+                }
+
+                if (sourceFilesInDestination) {
+                    // Ask user if they want to create a new subfolder
+                    int result = JOptionPane.showConfirmDialog(this,
+                        "You selected the same folder as the source files.\n" +
+                        "Would you like to create a new subfolder called 'updated_photos'?",
+                        "Create Subfolder",
+                        JOptionPane.YES_NO_CANCEL_OPTION,
+                        JOptionPane.QUESTION_MESSAGE);
+                    
+                    if (result == JOptionPane.YES_OPTION) {
+                        // Create a subfolder
+                        destinationDir = new File(destinationDir, "updated_photos");
+                    } else if (result == JOptionPane.CANCEL_OPTION) {
+                        return;
+                    }
+                    // If NO, use the selected directory as is
+                }
+                
                 copyPhotosToFolder(destinationDir);
             }
         }
