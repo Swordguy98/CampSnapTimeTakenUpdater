@@ -4,16 +4,21 @@ import com.drew.imaging.ImageMetadataReader;
 import com.drew.imaging.ImageProcessingException;
 import com.drew.metadata.Metadata;
 import com.drew.metadata.exif.ExifSubIFDDirectory;
+import org.apache.commons.imaging.Imaging;
+import org.apache.commons.imaging.common.ImageMetadata;
+import org.apache.commons.imaging.formats.jpeg.JpegImageMetadata;
+import org.apache.commons.imaging.formats.jpeg.exif.ExifRewriter;
+import org.apache.commons.imaging.formats.tiff.constants.ExifTagConstants;
+import org.apache.commons.imaging.formats.tiff.write.TiffOutputDirectory;
+import org.apache.commons.imaging.formats.tiff.write.TiffOutputSet;
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.text.SimpleDateFormat;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
 import java.util.Date;
 
 public class MainWindow extends JFrame {
@@ -189,7 +194,19 @@ public class MainWindow extends JFrame {
             return;
         }
 
-        if (!modifyOriginal) {
+        if (modifyOriginal) {
+            // Show confirmation dialog for modifying original files
+            int result = JOptionPane.showConfirmDialog(this,
+                "This will modify the original photos. This action cannot be undone.\n" +
+                "Are you sure you want to continue?",
+                "Confirm Modification",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+
+            if (result == JOptionPane.YES_OPTION) {
+                updateOriginalPhotos();
+            }
+        } else {
             // Handle "Copy to Folder" option
             JFileChooser chooser = new JFileChooser();
             chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
@@ -199,52 +216,192 @@ public class MainWindow extends JFrame {
                 File destinationDir = chooser.getSelectedFile();
                 copyPhotosToFolder(destinationDir);
             }
-        } else {
-            // To be implemented later: Modify original photos
+        }
+    }
+
+    private void updateOriginalPhotos() {
+        int successCount = 0;
+        int errorCount = 0;
+        StringBuilder errorMessages = new StringBuilder();
+        SimpleDateFormat exifDateFormat = new SimpleDateFormat("yyyy:MM:dd HH:mm:ss");
+
+        for (File file : selectedFiles) {
+            try {
+                // Check if file exists and is writable
+                if (!file.exists()) {
+                    throw new IOException("File does not exist: " + file.getName());
+                }
+                if (!file.canWrite()) {
+                    throw new IOException("Cannot write to file: " + file.getName());
+                }
+
+                // Get the original date and calculate new date
+                Metadata metadata = ImageMetadataReader.readMetadata(file);
+                ExifSubIFDDirectory directory = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
+                
+                if (directory != null) {
+                    Date originalDate = directory.getDateOriginal();
+                    if (originalDate != null) {
+                        // Calculate new date by adding the time difference
+                        Date newDate = new Date(originalDate.getTime() + this.timeToAdd);
+
+                        // Read the image metadata
+                        final ImageMetadata imageMetadata = Imaging.getMetadata(file);
+                        final JpegImageMetadata jpegMetadata = (JpegImageMetadata) imageMetadata;
+                        final TiffOutputSet outputSet = jpegMetadata != null
+                            ? jpegMetadata.getExif().getOutputSet()
+                            : new TiffOutputSet();
+
+                        // Update EXIF date fields
+                        final TiffOutputDirectory exifDirectory = outputSet.getOrCreateExifDirectory();
+                        exifDirectory.removeField(ExifTagConstants.EXIF_TAG_DATE_TIME_ORIGINAL);
+                        exifDirectory.add(ExifTagConstants.EXIF_TAG_DATE_TIME_ORIGINAL, exifDateFormat.format(newDate));
+
+                        // Create a temporary file for the update
+                        File tempFile = File.createTempFile("temp_", "_" + file.getName());
+                        
+                        // Write the updated metadata to the temporary file
+                        try (FileOutputStream fos = new FileOutputStream(tempFile);
+                             OutputStream os = new BufferedOutputStream(fos)) {
+                            new ExifRewriter().updateExifMetadataLossless(file, os, outputSet);
+                        }
+
+                        // Replace the original file with the temporary file
+                        Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                        successCount++;
+                    } else {
+                        throw new IOException("No original date found in metadata");
+                    }
+                } else {
+                    throw new IOException("No EXIF metadata found");
+                }
+            } catch (Exception e) {
+                errorCount++;
+                errorMessages.append(file.getName())
+                           .append(": ")
+                           .append(e.getMessage())
+                           .append("\n");
+                e.printStackTrace();
+            }
+        }
+
+        // Show results
+        if (errorCount > 0) {
+            String message = String.format("Process completed with some errors.\n" +
+                "Successfully updated: %d\n" +
+                "Errors: %d\n\n" +
+                "Error details:\n%s",
+                successCount, errorCount, errorMessages.toString());
             JOptionPane.showMessageDialog(this,
-                "Modify original photos feature will be implemented soon.",
-                "Not Implemented",
+                message,
+                "Update Complete with Errors",
+                JOptionPane.WARNING_MESSAGE);
+        } else {
+            String message = String.format("All files updated successfully.\nTotal files updated: %d",
+                successCount);
+            JOptionPane.showMessageDialog(this,
+                message,
+                "Update Complete",
                 JOptionPane.INFORMATION_MESSAGE);
         }
     }
 
     private void copyPhotosToFolder(File destinationDir) {
-        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
         int successCount = 0;
         int errorCount = 0;
+        StringBuilder errorMessages = new StringBuilder();
+        SimpleDateFormat exifDateFormat = new SimpleDateFormat("yyyy:MM:dd HH:mm:ss");
 
-        try {
-            for (File sourceFile : selectedFiles) {
-                try {
-                    // Read metadata
-                    Metadata metadata = ImageMetadataReader.readMetadata(sourceFile);
-                    ExifSubIFDDirectory directory = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
-                    
-                    if (directory != null) {
-                        Date originalDate = directory.getDateOriginal();
-                        if (originalDate != null) {
-                            // Create copy of the file
-                            File destFile = new File(destinationDir, sourceFile.getName());
-                            Files.copy(sourceFile.toPath(), destFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                            successCount++;
-                        }
-                    }
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    errorCount++;
-                }
+        // Create destination directory if it doesn't exist
+        if (!destinationDir.exists()) {
+            if (!destinationDir.mkdirs()) {
+                JOptionPane.showMessageDialog(this,
+                    "Could not create destination directory: " + destinationDir.getAbsolutePath(),
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
+                return;
             }
+        }
 
-            String message = String.format("Process completed.\nSuccessfully copied: %d\nErrors: %d",
-                successCount, errorCount);
-            JOptionPane.showMessageDialog(this, message, "Copy Complete", JOptionPane.INFORMATION_MESSAGE);
+        // Copy and process each file
+        for (File sourceFile : selectedFiles) {
+            try {
+                // Create copy of the file
+                File destFile = new File(destinationDir, sourceFile.getName());
+                
+                // Check if source file exists and is readable
+                if (!sourceFile.exists()) {
+                    throw new IOException("Source file does not exist: " + sourceFile.getName());
+                }
+                if (!sourceFile.canRead()) {
+                    throw new IOException("Cannot read source file: " + sourceFile.getName());
+                }
 
-        } catch (Exception e) {
-            e.printStackTrace();
+                // Get the original date and calculate new date
+                Metadata metadata = ImageMetadataReader.readMetadata(sourceFile);
+                ExifSubIFDDirectory directory = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
+                
+                if (directory != null) {
+                    Date originalDate = directory.getDateOriginal();
+                    if (originalDate != null) {
+                        // Calculate new date by adding the time difference
+                        Date newDate = new Date(originalDate.getTime() + this.timeToAdd);
+
+                        // Read the image metadata
+                        final ImageMetadata imageMetadata = Imaging.getMetadata(sourceFile);
+                        final JpegImageMetadata jpegMetadata = (JpegImageMetadata) imageMetadata;
+                        final TiffOutputSet outputSet = jpegMetadata != null
+                            ? jpegMetadata.getExif().getOutputSet()
+                            : new TiffOutputSet();
+
+                        // Update EXIF date fields
+                        final TiffOutputDirectory exifDirectory = outputSet.getOrCreateExifDirectory();
+                        exifDirectory.removeField(ExifTagConstants.EXIF_TAG_DATE_TIME_ORIGINAL);
+                        exifDirectory.add(ExifTagConstants.EXIF_TAG_DATE_TIME_ORIGINAL, exifDateFormat.format(newDate));
+                        
+                        // Write the metadata to the new file
+                        try (FileOutputStream fos = new FileOutputStream(destFile);
+                             OutputStream os = new BufferedOutputStream(fos)) {
+                            new ExifRewriter().updateExifMetadataLossless(sourceFile, os, outputSet);
+                        }
+                    } else {
+                        // If no date in metadata, just copy the file
+                        Files.copy(sourceFile.toPath(), destFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                    }
+                } else {
+                    // If no EXIF data, just copy the file
+                    Files.copy(sourceFile.toPath(), destFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                }
+                
+                successCount++;
+            } catch (Exception e) {
+                errorCount++;
+                errorMessages.append(sourceFile.getName())
+                           .append(": ")
+                           .append(e.getMessage())
+                           .append("\n");
+                e.printStackTrace();
+            }
+        }
+
+        // Show results
+        if (errorCount > 0) {
+            String message = String.format("Process completed with some errors.\n" +
+                "Successfully copied and updated: %d\n" +
+                "Errors: %d\n\n" +
+                "Error details:\n%s",
+                successCount, errorCount, errorMessages.toString());
             JOptionPane.showMessageDialog(this,
-                "An error occurred while copying files: " + e.getMessage(),
-                "Error",
-                JOptionPane.ERROR_MESSAGE);
+                message,
+                "Copy Complete with Errors",
+                JOptionPane.WARNING_MESSAGE);
+        } else {
+            String message = String.format("All files copied and metadata updated successfully.\nTotal files processed: %d",
+                successCount);
+            JOptionPane.showMessageDialog(this,
+                message,
+                "Copy Complete",
+                JOptionPane.INFORMATION_MESSAGE);
         }
     }
 
