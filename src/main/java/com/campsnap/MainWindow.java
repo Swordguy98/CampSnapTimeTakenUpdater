@@ -27,6 +27,11 @@ public class MainWindow extends JFrame {
     private JLabel dateDifferenceLabel;
     private File[] selectedFiles;
     private long timeToAdd;
+    private JTextField daysField;
+    private ButtonGroup timeModeGroup;
+    private JRadioButton autoTimeButton;
+    private JRadioButton manualTimeButton;
+    private boolean useAutoTime = true;
 
     public MainWindow() {
         // Set up the window
@@ -54,12 +59,103 @@ public class MainWindow extends JFrame {
         // Create layout
         setLayout(new BorderLayout());
         
-        // Top panel with select button and date difference label
+        // Top panel with select button, date difference label, and time adjustment controls
         JPanel topPanel = new JPanel(new BorderLayout());
         JPanel buttonPanel = new JPanel();
         buttonPanel.add(selectButton);
+        
+        // Create time adjustment panel
+        JPanel timeAdjustPanel = new JPanel();
+        timeAdjustPanel.setBorder(BorderFactory.createTitledBorder("Time Adjustment"));
+        
+        // Radio buttons for auto/manual mode
+        timeModeGroup = new ButtonGroup();
+        autoTimeButton = new JRadioButton("Automatic (Based on Most Recent Photo)");
+        manualTimeButton = new JRadioButton("Manual Adjustment");
+        timeModeGroup.add(autoTimeButton);
+        timeModeGroup.add(manualTimeButton);
+        autoTimeButton.setSelected(true);
+        
+        // Manual time adjustment field
+        JPanel manualPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        daysField = new JTextField(5);
+        daysField.setDocument(new javax.swing.text.PlainDocument() {
+            @Override
+            public void insertString(int offs, String str, javax.swing.text.AttributeSet a)
+                    throws javax.swing.text.BadLocationException {
+                if (str == null)
+                    return;
+                String newValue = getText(0, getLength()) + str;
+                try {
+                    // Only allow positive integers
+                    if (newValue.isEmpty() || Integer.parseInt(newValue) >= 0) {
+                        super.insertString(offs, str, a);
+                    }
+                } catch (NumberFormatException e) {
+                    // If not a number, don't insert
+                    return;
+                }
+            }
+        });
+        
+        manualPanel.add(new JLabel("Number of days to add:"));
+        manualPanel.add(daysField);
+        
+        // Layout time adjustment panel
+        timeAdjustPanel.setLayout(new BoxLayout(timeAdjustPanel, BoxLayout.Y_AXIS));
+        timeAdjustPanel.add(autoTimeButton);
+        timeAdjustPanel.add(manualTimeButton);
+        timeAdjustPanel.add(manualPanel);
+        
+        // Add action listeners for radio buttons and text field
+        autoTimeButton.addActionListener(e -> {
+            boolean isAuto = autoTimeButton.isSelected();
+            useAutoTime = isAuto;
+            daysField.setEnabled(!isAuto);
+            if (selectedFiles != null && selectedFiles.length > 0) {
+                processPhotos(selectedFiles);
+            }
+        });
+        
+        manualTimeButton.addActionListener(e -> {
+            boolean isManual = manualTimeButton.isSelected();
+            useAutoTime = !isManual;
+            daysField.setEnabled(isManual);
+            if (selectedFiles != null && selectedFiles.length > 0) {
+                processPhotos(selectedFiles);
+            }
+        });
+
+        // Add document listener to days field
+        daysField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            private void update() {
+                if (selectedFiles != null && selectedFiles.length > 0 && !useAutoTime) {
+                    processPhotos(selectedFiles);
+                }
+            }
+            
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                update();
+            }
+            
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                update();
+            }
+            
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                update();
+            }
+        });
+        
+        // Initially disable field since auto mode is default
+        daysField.setEnabled(false);
+        
         topPanel.add(buttonPanel, BorderLayout.WEST);
         topPanel.add(dateDifferenceLabel, BorderLayout.CENTER);
+        topPanel.add(timeAdjustPanel, BorderLayout.SOUTH);
         
         // Bottom panel with update options
         JPanel bottomPanel = new JPanel();
@@ -119,27 +215,89 @@ public class MainWindow extends JFrame {
         Date mostRecentDate = null;
         Date currentDate = new Date();
 
-        // First pass: find the most recent date
+        if (useAutoTime) {
+            // First pass: find the most recent date
+            for (File file : files) {
+                try {
+                    Metadata metadata = ImageMetadataReader.readMetadata(file);
+                    ExifSubIFDDirectory directory = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
+                    
+                    if (directory != null) {
+                        Date date = directory.getDateOriginal();
+                        if (date != null && (mostRecentDate == null || date.after(mostRecentDate))) {
+                            mostRecentDate = date;
+                        }
+                    }
+                } catch (ImageProcessingException | IOException e) {
+                    e.printStackTrace();
+                }
+            }
+
+            // Calculate the time difference to add
+            this.timeToAdd = 0;
+            if (mostRecentDate != null) {
+                this.timeToAdd = currentDate.getTime() - mostRecentDate.getTime();
+            }
+        } else {
+            // Calculate manual time difference
+            long days = 0;
+            try {
+                String daysText = daysField.getText().trim();
+                if (!daysText.isEmpty()) {
+                    days = Long.parseLong(daysText);
+                }
+            } catch (NumberFormatException e) {
+                // If parsing fails, use 0
+            }
+            
+            this.timeToAdd = days * 24L * 60L * 60L * 1000L;
+        }
+
+        // Second pass: process each photo
         for (File file : files) {
             try {
                 Metadata metadata = ImageMetadataReader.readMetadata(file);
                 ExifSubIFDDirectory directory = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
                 
+                String fileName = file.getName();
+                String dateTaken = "Unknown";
+                String newDate = "Unknown";
+                
                 if (directory != null) {
                     Date date = directory.getDateOriginal();
-                    if (date != null && (mostRecentDate == null || date.after(mostRecentDate))) {
-                        mostRecentDate = date;
+                    if (date != null) {
+                        dateTaken = dateFormat.format(date);
+                        
+                        // Calculate new date by adding the time difference
+                        Date calculatedDate = new Date(date.getTime() + this.timeToAdd);
+                        newDate = dateFormat.format(calculatedDate);
                     }
                 }
+                
+                tableModel.addRow(new Object[]{fileName, dateTaken, newDate});
             } catch (ImageProcessingException | IOException e) {
                 e.printStackTrace();
+                tableModel.addRow(new Object[]{file.getName(), "Error reading metadata", "Error"});
             }
         }
 
-        // Calculate the time difference to add
-        this.timeToAdd = 0;
-        if (mostRecentDate != null) {
-            this.timeToAdd = currentDate.getTime() - mostRecentDate.getTime();
+        // Update the date difference label
+        if (useAutoTime && mostRecentDate != null) {
+            long diffInDays = timeToAdd / (24 * 60 * 60 * 1000);
+            String recentDateStr = dateFormat.format(mostRecentDate);
+            dateDifferenceLabel.setText(String.format(
+                "<html>Most recent photo: %s<br>Days since then: %d</html>",
+                recentDateStr, diffInDays
+            ));
+        } else if (!useAutoTime) {
+            String daysText = daysField.getText().trim();
+            long days = daysText.isEmpty() ? 0 : Long.parseLong(daysText);
+            dateDifferenceLabel.setText(String.format(
+                "<html>Manual adjustment:<br>%d days</html>",
+                days
+            ));
+        } else {
+            dateDifferenceLabel.setText("No valid dates found in photos");
         }
 
         // Second pass: process each photo
