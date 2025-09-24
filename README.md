@@ -5,9 +5,6 @@ This application helps you update the "Date Taken" metadata of your photos, part
 ## Requirements
 
 - Java 17 or later installed on your computer
-  - Windows: Download from [Eclipse Adoptium](https://adoptium.net/)
-  - macOS: Download from [Eclipse Adoptium](https://adoptium.net/)
-  - Linux: Download from [Eclipse Adoptium](https://adoptium.net/) or use your package manager
 
 ## Installation
 
@@ -15,6 +12,8 @@ This application helps you update the "Date Taken" metadata of your photos, part
 2. Make sure you have Java installed (see Requirements above)
 
 ## Running the Application
+
+You can either run the JAR file included or you can compile it yourself following the steps below:
 
 ### Windows:
 - Double-click `run.bat`
